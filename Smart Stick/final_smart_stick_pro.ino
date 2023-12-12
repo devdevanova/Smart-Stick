@@ -1,0 +1,181 @@
+#include <SoftwareSerial.h>
+SoftwareSerial espSerial(6, 7); // RX, TX pins for ESP8266
+
+// Wi-Fi credentials
+const char* ssid = "MrDev";
+const char* password = "developer";
+
+// IFTTT Webhooks details
+const char* iftttEventName = "push_button";
+const char* iftttKey = "chv7_4xyttRqPBue7Iw7OJ";
+
+// Push button details
+const int buttonPin = 11;  // Pin connected to the push button
+bool buttonPressed = false;
+
+// Pins connected to the ultrasonic sensor
+#define trigPin 2
+#define echoPin 3
+// Pins for IR Sensor
+#define irdetect 4
+// Pin connected to the LDR
+#define ldr 5
+// Pin connected to the piezo buzzer
+#define alarm 10
+
+
+void connectToWiFi() {
+  // Connect to Wi-Fi network
+  espSerial.println("AT+CWMODE=1"); // Set ESP8266 to station mode
+  delay(1000);
+
+  String cmd = "AT+CWJAP=\"" + String(ssid) + "\",\"" + String(password) + "\"";
+  espSerial.println(cmd);
+  delay(5000);
+
+  if (espSerial.find("OK")) {
+    Serial.println("Connected to Wi-Fi");
+  } else {
+    Serial.println("Failed to connect to Wi-Fi");
+  }
+}
+
+void triggerIFTTTMessage() {
+  // Trigger IFTTT message
+  String message = "Button pressed on Arduino Uno";
+
+  espSerial.print("AT+CIPSTART=\"TCP\",\"maker.ifttt.com\",80\r\n");
+  delay(5000);
+
+  if (espSerial.find("OK")) {
+    Serial.println("TCP connection established");
+    start(1500, "Emergency situation", 1000);
+  } else {
+    Serial.println("Failed to establish TCP connection");
+    stop();
+    return;
+  }
+
+  String postRequest = "POST /trigger/" + String(iftttEventName) + "/with/key/" + String(iftttKey) + " HTTP/1.1\r\n" +
+                       "Host: maker.ifttt.com\r\n" +
+                       "Content-Type: application/x-www-form-urlencoded\r\n" +
+                       "Content-Length: " + String(message.length()) + "\r\n\r\n" +
+                       message;
+
+  espSerial.print("AT+CIPSEND=");
+  espSerial.println(postRequest.length());
+  delay(2000);
+
+  if (espSerial.find(">")) {
+    Serial.println("Sending POST request");
+  } else {
+    Serial.println("Failed to send POST request");
+    return;
+  }
+
+  espSerial.print(postRequest);
+  delay(5000);
+
+  if (espSerial.find("OK")) {
+    Serial.println("IFTTT message triggered successfully");
+  } else {
+    Serial.println("Failed to trigger IFTTT message");
+  }
+}
+
+void setup() {
+  pinMode(buttonPin, INPUT_PULLUP);
+
+  Serial.begin(115200);
+  while (!Serial) continue;
+
+  espSerial.begin(9600);
+  Serial.println("ESP8266 module initialized");
+
+  connectToWiFi();
+
+  // Initialize the sensor pins
+  pinMode(trigPin, OUTPUT);
+  pinMode(echoPin, INPUT);
+  pinMode(irdetect, INPUT);
+  //pinMode(alarm, OUTPUT);
+  pinMode(ldr, INPUT);
+
+  Serial.println("Server started");
+}
+
+void loop() {
+  int buttonState = digitalRead(buttonPin);
+
+  if (buttonState == LOW) {
+    if (!buttonPressed) {
+      buttonPressed = true;
+      triggerIFTTTMessage();
+    }
+  } else {
+    buttonPressed = false;
+
+    // Establishing variables for duration of the ping and the distance result in inches and centimeters
+    long duration, inches, cm;
+
+    // The PING))) is triggered by a HIGH pulse of 2 or more microseconds
+    // Give a short LOW pulse beforehand to ensure a clean HIGH pulse
+    digitalWrite(trigPin, LOW);
+    delayMicroseconds(2);
+    digitalWrite(trigPin, HIGH);
+    delayMicroseconds(5);
+    digitalWrite(trigPin, LOW);
+
+    // Take reading on echo pin
+    duration = pulseIn(echoPin, HIGH);
+
+    // Convert the time into a distance
+    inches = microsecondsToInches(duration);
+    cm = microsecondsToCentimeters(duration);
+    int irStatus = digitalRead(irdetect);
+
+    // Checking objects with the ultrasonic sensor
+    if (inches >= 5 && inches < 15) {
+      start(2000, "Ultrasonic -- object detect", 50);
+    } else if (inches >= 15 && inches < 25) {
+      start(2000, "Ultrasonic -- object detect", 750);
+    } else if (inches >= 25 && inches < 35) {
+      start(2000, "Ultrasonic -- object detect ", 500);
+    } else {
+      stop();
+    }
+
+    // If nothing detected in the ultrasonic sensor, check the IR sensor
+    if (irStatus == 0) {
+      start(2000, "IR sensor -- object detect", 20);
+    } else {
+      stop();
+
+      // If nothing detected in the ultrasonic sensor and IR sensor, check the LDR sensor
+      if (digitalRead(ldr) == 1) {
+        start(2000, "LDR sensor -- obstacle detect", 150);
+      } else {
+        stop();
+      }
+    }
+  }
+}
+
+void start(int freq, const char* msg, long ms) {
+  Serial.println(msg);
+  tone(alarm, freq);
+  delay(ms);
+}
+
+void stop() {
+  noTone(alarm);
+  delay(100);
+}
+
+long microsecondsToInches(long microseconds) {
+  return microseconds / 74 / 2;
+}
+
+long microsecondsToCentimeters(long microseconds) {
+  return microseconds / 29 / 2;
+}
